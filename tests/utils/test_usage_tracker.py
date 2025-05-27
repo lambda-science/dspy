@@ -5,6 +5,113 @@ from dspy.utils.usage_tracker import UsageTracker, track_usage
 from dspy.utils.dummies import DummyLM
 import os
 
+def test_merge_usage_entries_with_nested_dict():
+    """Test merging usage entries where one has a nested dictionary structure."""
+    tracker = UsageTracker()
+    
+    # Simulate Bedrock-style nested usage data
+    bedrock_usage = {
+        "prompt_tokens": {"total": 100},
+        "completion_tokens": {"total": 200},
+        "total_tokens": {"total": 300}
+    }
+    
+    # Simulate standard usage data
+    standard_usage = {
+        "prompt_tokens": 150,
+        "completion_tokens": 250,
+        "total_tokens": 400
+    }
+    
+    # Test merging in both directions
+    result1 = tracker._merge_usage_entries(bedrock_usage, standard_usage)
+    result2 = tracker._merge_usage_entries(standard_usage, bedrock_usage)
+    
+    # Verify that the nested structure is preserved
+    assert isinstance(result1["prompt_tokens"], dict)
+    assert isinstance(result1["completion_tokens"], dict)
+    assert isinstance(result2["prompt_tokens"], dict)
+    assert isinstance(result2["completion_tokens"], dict)
+
+def test_merge_usage_entries_with_mixed_types():
+    """Test merging usage entries with mixed types of values."""
+    tracker = UsageTracker()
+    
+    usage1 = {
+        "prompt_tokens": 100,
+        "completion_tokens": {"total": 200},
+        "metadata": {"model": "bedrock"},
+        "string_value": "test"
+    }
+    
+    usage2 = {
+        "prompt_tokens": {"total": 150},
+        "completion_tokens": 250,
+        "metadata": {"provider": "aws"},
+        "string_value": "another"
+    }
+    
+    result = tracker._merge_usage_entries(usage1, usage2)
+    
+    # Verify nested structures are preserved
+    assert isinstance(result["prompt_tokens"], dict)
+    assert isinstance(result["completion_tokens"], dict)
+    assert isinstance(result["metadata"], dict)
+    assert "model" in result["metadata"]
+    assert "provider" in result["metadata"]
+    
+    # Verify string values are handled correctly
+    assert isinstance(result["string_value"], str)
+
+def test_merge_usage_entries_with_none_values():
+    """Test merging usage entries containing None values."""
+    tracker = UsageTracker()
+    
+    usage1 = {
+        "prompt_tokens": None,
+        "completion_tokens": 200
+    }
+    
+    usage2 = {
+        "prompt_tokens": 150,
+        "completion_tokens": None
+    }
+    
+    result = tracker._merge_usage_entries(usage1, usage2)
+    
+    # Verify None values are handled correctly
+    assert result["prompt_tokens"] == 150
+    assert result["completion_tokens"] == 200
+
+def test_merge_bedrock_streaming_usage():
+    """Test merging usage entries in Bedrock streaming context."""
+    tracker = UsageTracker()
+    
+    # Simulate multiple streaming chunks from Bedrock
+    chunks = [
+        {
+            "prompt_tokens": {"total": 50, "streaming": True},
+            "completion_tokens": {"total": 10, "streaming": True}
+        },
+        {
+            "prompt_tokens": {"total": 50, "streaming": True},
+            "completion_tokens": {"total": 20, "streaming": True}
+        }
+    ]
+    
+    # Merge chunks sequentially
+    total_usage = {}
+    for chunk in chunks:
+        total_usage = tracker._merge_usage_entries(total_usage, chunk)
+    
+    # Verify the merged result maintains structure and correctly combines values
+    assert isinstance(total_usage["prompt_tokens"], dict)
+    assert isinstance(total_usage["completion_tokens"], dict)
+    assert total_usage["prompt_tokens"]["total"] == 100  # 50 + 50
+    assert total_usage["completion_tokens"]["total"] == 30  # 10 + 20
+    assert total_usage["prompt_tokens"]["streaming"] is True
+    assert total_usage["completion_tokens"]["streaming"] is True
+
 
 def test_add_usage_entry():
     """Test adding usage entries to the tracker."""
@@ -145,7 +252,11 @@ def test_track_usage_context_manager():
     lm = dspy.LM("openai/gpt-4o-mini", cache=False)
     dspy.settings.configure(lm=lm)
 
-    predict = dspy.ChainOfThought("question -> answer")
+    class QASignature(dspy.Signature):
+        def __init__(self):
+            super().__init__(inputs=["question"], outputs=["answer"])
+            
+    predict = dspy.ChainOfThought(signature=QASignature)
     with track_usage() as tracker:
         predict(question="What is the capital of France?")
         predict(question="What is the capital of Italy?")
